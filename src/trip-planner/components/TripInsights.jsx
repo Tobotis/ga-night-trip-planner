@@ -11,10 +11,10 @@ const STAY_PRESETS = [
   {
     id: "quick",
     label: "Quick",
-    minGroundMinutes: 45,
+    minGroundMinutes: 0,
     maxGroundMinutes: 120,
     preferredGroundMinutes: 90,
-    hint: "45-120m",
+    hint: "0-2h",
     color: "#22d3ee",
   },
   {
@@ -38,7 +38,7 @@ const STAY_PRESETS = [
 ];
 
 const STAY_DISTRIBUTION_BINS = [
-  { label: "45-120m", minMinutes: 45, maxMinutes: 120 },
+  { label: "0-2h", minMinutes: 0, maxMinutes: 120 },
   { label: "2-4h", minMinutes: 120, maxMinutes: 240 },
   { label: "4-6h", minMinutes: 240, maxMinutes: 360 },
   { label: "6-8h", minMinutes: 360, maxMinutes: 480 },
@@ -146,6 +146,48 @@ function RecommendationCard({ title, subtitle, candidate, onFocusPair }) {
   );
 }
 
+function AlternativeRow({ candidate, onFocusPair }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1fr auto",
+        alignItems: "center",
+        gap: "8px",
+        padding: "6px 8px",
+        border: "1px solid #202437",
+        borderRadius: "6px",
+        background: "#101224",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ color: "#c9ccd6", fontSize: "11px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          Out #{candidate.outbound.item.tableIndex + 1} {formatTime(candidate.outbound.metrics.departureIso)}-{formatTime(candidate.outbound.metrics.arrivalIso)} ·
+          Ret #{candidate.ret.item.tableIndex + 1} {formatTime(candidate.ret.metrics.departureIso)}-{formatTime(candidate.ret.metrics.arrivalIso)}
+        </div>
+        <div style={{ color: "#8f94a8", fontSize: "10px" }}>
+          Travel {formatDuration(candidate.totalTravelSec)} · Transfers {candidate.totalTransfers} · City {formatDuration(candidate.groundSec)}
+        </div>
+      </div>
+      <button
+        onClick={() => onFocusPair?.(candidate.outbound.item.tableIndex, candidate.ret.item.tableIndex)}
+        style={{
+          background: "#1f2540",
+          color: "#c7d2fe",
+          border: "1px solid #313d72",
+          borderRadius: "5px",
+          padding: "2px 7px",
+          fontSize: "10px",
+          cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Focus
+      </button>
+    </div>
+  );
+}
+
 export default function TripInsights({
   selectedCity,
   outbound,
@@ -163,7 +205,7 @@ export default function TripInsights({
   }));
 
   const allCandidates = useMemo(
-    () => listRoundTripCandidates(outboundItems, returnItems, { minGroundMinutes: 45 }),
+    () => listRoundTripCandidates(outboundItems, returnItems, { minGroundMinutes: 0 }),
     [outboundItems, returnItems]
   );
 
@@ -203,6 +245,7 @@ export default function TripInsights({
   const rec = presetRecommendations[activePreset.id] || {
     bestOverall: null,
     fastest: null,
+    alternatives: [],
     candidatesCount: 0,
     mode: "none",
     hasAnyDirect: false,
@@ -403,6 +446,23 @@ export default function TripInsights({
           ) : (
             <div style={{ color: "#8f94a8", fontSize: "11px" }}>
               Fastest total travel is the same route as Best Overall.
+            </div>
+          )}
+
+          {rec.alternatives.length > 0 && (
+            <div>
+              <div style={{ color: "#8f94a8", fontSize: "10px", margin: "2px 0 6px", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Other Good Combinations
+              </div>
+              <div style={{ display: "grid", gap: "6px" }}>
+                {rec.alternatives.map((candidate) => (
+                  <AlternativeRow
+                    key={candidate.key}
+                    candidate={candidate}
+                    onFocusPair={onFocusPair}
+                  />
+                ))}
+              </div>
             </div>
           )}
         </div>

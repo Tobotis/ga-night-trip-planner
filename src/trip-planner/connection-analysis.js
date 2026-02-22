@@ -74,6 +74,20 @@ function compareDesc(a, b) {
   return compareAsc(b, a);
 }
 
+function transferPenaltyScore(candidate) {
+  const totalWaitMin = candidate.totalTransferWaitSec / 60;
+  const maxWaitMin = candidate.maxTransferWaitSec / 60;
+
+  // Strongly punish long single waits so a route with one painful transfer
+  // is ranked much lower than smoother alternatives.
+  return (
+    totalWaitMin +
+    maxWaitMin * 2 +
+    Math.max(0, maxWaitMin - 15) * 4 +
+    Math.max(0, maxWaitMin - 30) * 8
+  );
+}
+
 function createCandidates(outboundItems, returnItems, minGroundSec, maxGroundSec) {
   const outbound = outboundItems.map((item) => ({
     item,
@@ -96,6 +110,7 @@ function createCandidates(outboundItems, returnItems, minGroundSec, maxGroundSec
         (ret.metrics.durationSec ?? Number.POSITIVE_INFINITY);
       const totalTransfers = out.metrics.transfers + ret.metrics.transfers;
       const totalTransferWaitSec = out.metrics.transferWaitSec + ret.metrics.transferWaitSec;
+      const maxTransferWaitSec = Math.max(out.metrics.maxTransferWaitSec, ret.metrics.maxTransferWaitSec);
       const directLegs = (out.metrics.transfers === 0 ? 1 : 0) + (ret.metrics.transfers === 0 ? 1 : 0);
 
       candidates.push({
@@ -105,6 +120,8 @@ function createCandidates(outboundItems, returnItems, minGroundSec, maxGroundSec
         totalTravelSec,
         totalTransfers,
         totalTransferWaitSec,
+        maxTransferWaitSec,
+        transferPenalty: 0,
         groundSec,
         directLegs,
         bothLegsDirect: directLegs === 2,
@@ -112,7 +129,10 @@ function createCandidates(outboundItems, returnItems, minGroundSec, maxGroundSec
     }
   }
 
-  return candidates;
+  return candidates.map((candidate) => ({
+    ...candidate,
+    transferPenalty: transferPenaltyScore(candidate),
+  }));
 }
 
 export function listRoundTripCandidates(outboundItems, returnItems, options = {}) {
@@ -137,7 +157,7 @@ function compareByTravel(a, b, preferredGroundSec) {
   );
   if (result !== 0) return result;
 
-  result = compareAsc(a.totalTransferWaitSec, b.totalTransferWaitSec);
+  result = compareAsc(a.transferPenalty, b.transferPenalty);
   if (result !== 0) return result;
 
   return compareAsc(a.key, b.key);
@@ -171,6 +191,9 @@ function compareByOverall(a, b, mode, preferredGroundSec) {
     result = compareAsc(a.totalTransfers, b.totalTransfers);
     if (result !== 0) return result;
 
+    result = compareAsc(a.transferPenalty, b.transferPenalty);
+    if (result !== 0) return result;
+
     result = compareAsc(groundDistanceA, groundDistanceB);
     if (result !== 0) return result;
 
@@ -183,7 +206,7 @@ function compareByOverall(a, b, mode, preferredGroundSec) {
   let result = compareAsc(a.totalTransfers, b.totalTransfers);
   if (result !== 0) return result;
 
-  result = compareAsc(a.totalTransferWaitSec, b.totalTransferWaitSec);
+  result = compareAsc(a.transferPenalty, b.transferPenalty);
   if (result !== 0) return result;
 
   result = compareAsc(groundDistanceA, groundDistanceB);
@@ -202,12 +225,14 @@ export function recommendRoundTrips(outboundItems, returnItems, options = {}) {
       ? Number.POSITIVE_INFINITY
       : options.maxGroundMinutes * 60;
   const preferredGroundSec = (options.preferredGroundMinutes ?? 180) * 60;
+  const alternativesLimit = options.alternativesLimit ?? 5;
 
   const candidates = createCandidates(outboundItems, returnItems, minGroundSec, maxGroundSec);
   if (candidates.length === 0) {
     return {
       bestOverall: null,
       fastest: null,
+      alternatives: [],
       candidatesCount: 0,
       mode: "none",
       hasAnyDirect: false,
@@ -219,12 +244,21 @@ export function recommendRoundTrips(outboundItems, returnItems, options = {}) {
 
   const mode = hasBothDirect ? "both_direct" : hasAnyDirect ? "any_direct" : "no_direct";
 
+  const sortedOverall = [...candidates].sort((a, b) => compareByOverall(a, b, mode, preferredGroundSec));
+  const bestOverall = sortedOverall[0];
   const fastest = [...candidates].sort((a, b) => compareByTravel(a, b, preferredGroundSec))[0];
-  const bestOverall = [...candidates].sort((a, b) => compareByOverall(a, b, mode, preferredGroundSec))[0];
+  const excludedKeys = new Set([
+    bestOverall?.key,
+    fastest?.key,
+  ].filter(Boolean));
+  const alternatives = sortedOverall
+    .filter((candidate) => !excludedKeys.has(candidate.key))
+    .slice(0, alternativesLimit);
 
   return {
     bestOverall,
     fastest,
+    alternatives,
     candidatesCount: candidates.length,
     mode,
     hasAnyDirect,
