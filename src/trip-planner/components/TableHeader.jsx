@@ -3,7 +3,7 @@ export default function TableHeader({ compact }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: compact ? "56px 56px 1fr 28px" : "70px 70px 80px 50px 1fr 36px",
+        gridTemplateColumns: compact ? "56px 56px 1fr" : "70px 70px 80px 50px 1fr",
         gap: compact ? "6px" : "8px",
         padding: "6px 12px",
         borderBottom: "1px solid #1a1a1a",
@@ -19,7 +19,6 @@ export default function TableHeader({ compact }) {
       {!compact && <span>Duration</span>}
       {!compact && <span>Chg</span>}
       <span>Trains</span>
-      <span style={{ textAlign: "center" }}>GA</span>
     </div>
   );
 }

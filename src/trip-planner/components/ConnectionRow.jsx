@@ -1,13 +1,10 @@
-import { isWithinGA } from "../ga-window";
 import { formatTime, parseSbbDuration } from "../format-utils";
 
-export default function ConnectionRow({ conn, gaDate, compact }) {
+export default function ConnectionRow({ conn, compact }) {
   const dep = conn.from?.departure;
   const arr = conn.to?.arrival;
   const transfers = conn.transfers;
   const sections = conn.sections || [];
-
-  const valid = isWithinGA(dep, gaDate) && isWithinGA(arr, gaDate);
 
   const products = sections
     .filter((section) => section.journey)
@@ -18,13 +15,11 @@ export default function ConnectionRow({ conn, gaDate, compact }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: compact ? "56px 56px 1fr 28px" : "70px 70px 80px 50px 1fr 36px",
+        gridTemplateColumns: compact ? "56px 56px 1fr" : "70px 70px 80px 50px 1fr",
         alignItems: "center",
         gap: compact ? "6px" : "8px",
         padding: "8px 12px",
         borderBottom: "1px solid #1a1a1a",
-        opacity: valid ? 1 : 0.4,
-        background: valid ? "transparent" : "#0a0000",
       }}
     >
       <span
@@ -81,9 +76,6 @@ export default function ConnectionRow({ conn, gaDate, compact }) {
           </span>
         ))}
       </div>
-      <span style={{ fontSize: "14px", textAlign: "center", color: valid ? "#34d399" : "#f87171" }}>
-        {valid ? "✓" : "✗"}
-      </span>
     </div>
   );
 }

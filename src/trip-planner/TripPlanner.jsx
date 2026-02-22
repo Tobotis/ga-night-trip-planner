@@ -3,12 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchConnections } from "./api";
 import { CITIES, HOME } from "./constants";
 import { nextDateOf, toDateStr } from "./date-utils";
-import { formatDuration, formatTime } from "./format-utils";
 import { isWithinGA, morningReturnQueryTime, nightGAWindow } from "./ga-window";
-import { addMinutes, durationSeconds, splitDateTime } from "./trip-utils";
+import { addMinutes, splitDateTime } from "./trip-utils";
+import { fetchConnectionsWithinGAWindow } from "./ga-connections";
 import ConnectionRow from "./components/ConnectionRow";
 import SectionDetail from "./components/SectionDetail";
 import TableHeader from "./components/TableHeader";
+import TripInsights from "./components/TripInsights";
 
 export default function TripPlanner() {
   const [mode, setMode] = useState("single");
@@ -55,22 +56,29 @@ export default function TripPlanner() {
       setMultiResults(null);
 
       try {
-        const [outData, retData] = await Promise.all([
-          fetchConnections(HOME, city.station, date, "19:00", false, 6),
-          fetchConnections(city.station, HOME, date, "19:00", false, 16),
+        const [outConns, retConns] = await Promise.all([
+          fetchConnectionsWithinGAWindow({
+            from: HOME,
+            to: city.station,
+            gaDate: date,
+            startTime: "19:00",
+            targetCount: 24,
+            maxBatches: 12,
+          }),
+          fetchConnectionsWithinGAWindow({
+            from: city.station,
+            to: HOME,
+            gaDate: date,
+            startTime: "19:00",
+            targetCount: 36,
+            maxBatches: 14,
+          }),
         ]);
 
-        const outConns = outData.connections ?? [];
-        const retConns = retData.connections ?? [];
         setOutbound(outConns);
         setReturnTrips(retConns);
 
-        const validRet = retConns.filter(
-          (connection) =>
-            isWithinGA(connection.from?.departure, date) && isWithinGA(connection.to?.arrival, date)
-        );
-
-        if (validRet.length === 0) {
+        if (retConns.length === 0) {
           const morningTime = morningReturnQueryTime(date);
           try {
             const morningData = await fetchConnections(
@@ -108,9 +116,13 @@ export default function TripPlanner() {
 
     try {
       const legs = [];
+      const isGaEligible = (connection) =>
+        isWithinGA(connection.from?.departure, date) &&
+        isWithinGA(connection.to?.arrival, date);
 
       const leg0Data = await fetchConnections(HOME, multiCity[0].station, date, "19:00", false, 3);
-      legs.push({ from: HOME, to: multiCity[0].name, connections: leg0Data.connections ?? [] });
+      const leg0Connections = (leg0Data.connections ?? []).filter(isGaEligible);
+      legs.push({ from: HOME, to: multiCity[0].name, connections: leg0Connections });
 
       for (let i = 0; i < multiCity.length - 1; i += 1) {
         const prevBestArr = legs[i].connections[0]?.to?.arrival;
@@ -131,10 +143,11 @@ export default function TripPlanner() {
           false,
           3
         );
+        const legConnections = (legData.connections ?? []).filter(isGaEligible);
         legs.push({
           from: multiCity[i].name,
           to: multiCity[i + 1].name,
-          connections: legData.connections ?? [],
+          connections: legConnections,
         });
       }
 
@@ -150,7 +163,8 @@ export default function TripPlanner() {
       }
 
       const retData = await fetchConnections(lastCity.station, HOME, retDate, retTime, false, 3);
-      legs.push({ from: lastCity.name, to: HOME, connections: retData.connections ?? [] });
+      const returnConnections = (retData.connections ?? []).filter(isGaEligible);
+      legs.push({ from: lastCity.name, to: HOME, connections: returnConnections });
 
       setMultiResults(legs);
     } catch (fetchError) {
@@ -444,231 +458,136 @@ export default function TripPlanner() {
 
         {mode === "single" && selectedCity && !loading && (outbound || returnTrips) &&
           (() => {
-            const displayReturn = returnTrips
-              ? returnTrips.filter(
-                  (connection) =>
-                    isWithinGA(connection.from?.departure, date) &&
-                    isWithinGA(connection.to?.arrival, date)
-                )
-              : null;
+            const validOut = (outbound || []).filter(
+              (connection) =>
+                isWithinGA(connection.from?.departure, date) &&
+                isWithinGA(connection.to?.arrival, date)
+            );
+            const displayReturn = (returnTrips || []).filter(
+              (connection) =>
+                isWithinGA(connection.from?.departure, date) &&
+                isWithinGA(connection.to?.arrival, date)
+            );
 
             return (
               <div>
-                {[
-                  {
-                    title: `Zürich HB → ${selectedCity.name}`,
-                    data: outbound,
-                    expanded: expandedOut,
-                    setExpanded: setExpandedOut,
-                    dir: "out",
-                  },
-                  {
-                    title: `${selectedCity.name} → Zürich HB`,
-                    data: displayReturn,
-                    expanded: expandedRet,
-                    setExpanded: setExpandedRet,
-                    dir: "ret",
-                  },
-                ].map(({ title, data, expanded, setExpanded, dir }) => (
-                  <div key={dir} style={{ marginBottom: "16px" }}>
-                    <h3
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 600,
-                        color: "#ccc",
-                        margin: "0 0 8px",
-                        letterSpacing: "-0.01em",
-                      }}
-                    >
-                      {dir === "out" ? "→" : "←"} {title}
-                    </h3>
-                    <div
-                      style={{
-                        background: "#0c0c10",
-                        border: "1px solid #1a1a1a",
-                        borderRadius: "8px",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <TableHeader compact={compact} />
-                      {data && data.length > 0 ? (
-                        data.map((connection, index) => (
-                          <div key={index}>
-                            <div
-                              onClick={() => setExpanded(expanded === index ? null : index)}
-                              style={{ cursor: "pointer" }}
-                            >
-                              <ConnectionRow conn={connection} gaDate={date} compact={compact} />
-                            </div>
-                            {expanded === index && <SectionDetail conn={connection} />}
-                          </div>
-                        ))
-                      ) : (
-                        <div style={{ padding: "16px", textAlign: "center", color: "#555", fontSize: "12px" }}>
-                          No connections found for this time window.
-                        </div>
-                      )}
+                <TripInsights
+                  selectedCity={selectedCity}
+                  outbound={validOut}
+                  displayReturn={displayReturn}
+                  onFocusPair={(outIndex, retIndex) => {
+                    setExpandedOut(outIndex);
+                    setExpandedRet(retIndex);
+                    if (typeof document !== "undefined") {
+                      document.getElementById("single-route-tables")?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
+                    }
+                  }}
+                />
+
+                {validOut.length > 0 && displayReturn.length === 0 && (
+                  <div
+                    style={{
+                      background: "#1a0505",
+                      border: "1px solid #4a1515",
+                      borderRadius: "8px",
+                      padding: "12px 16px",
+                      marginBottom: "14px",
+                    }}
+                  >
+                    <div style={{ color: "#f87171", fontSize: "12px", fontWeight: 500, marginBottom: "8px" }}>
+                      No valid return within GA Night window ({gaWindow.end} cutoff). You may need to stay
+                      overnight or buy a supplementary ticket for the morning return.
                     </div>
+                    {morningReturn !== null && (
+                      <div>
+                        <div style={{ fontSize: "11px", color: "#fbbf24", fontWeight: 600, marginBottom: "6px" }}>
+                          First morning trains back to Zürich on {nextDate} (outside GA - separate ticket
+                          needed):
+                        </div>
+                        {morningReturn.length > 0 ? (
+                          <div
+                            style={{
+                              background: "#0c0c10",
+                              border: "1px solid #2a1500",
+                              borderRadius: "6px",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <TableHeader compact={compact} />
+                            {morningReturn.map((connection, index) => (
+                              <ConnectionRow key={index} conn={connection} compact={compact} />
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: "11px", color: "#555" }}>No morning trains found.</div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ))}
+                )}
 
-                {outbound && returnTrips && outbound.length > 0 && returnTrips.length > 0 &&
-                  (() => {
-                    const validOut = outbound.filter(
-                      (connection) =>
-                        isWithinGA(connection.from?.departure, date) &&
-                        isWithinGA(connection.to?.arrival, date)
-                    );
-                    const validRet = returnTrips.filter(
-                      (connection) =>
-                        isWithinGA(connection.from?.departure, date) &&
-                        isWithinGA(connection.to?.arrival, date)
-                    );
-                    const bestOut = validOut[0];
-                    const bestRet = validRet.length > 0 ? validRet[validRet.length - 1] : null;
-                    const groundTime =
-                      bestOut?.to?.arrival && bestRet?.from?.departure
-                        ? durationSeconds(bestOut.to.arrival, bestRet.from.departure)
-                        : null;
-
-                    return (
-                      <div
+                <div id="single-route-tables">
+                  {[
+                    {
+                      title: `Zürich HB → ${selectedCity.name}`,
+                      data: validOut,
+                      expanded: expandedOut,
+                      setExpanded: setExpandedOut,
+                      dir: "out",
+                    },
+                    {
+                      title: `${selectedCity.name} → Zürich HB`,
+                      data: displayReturn,
+                      expanded: expandedRet,
+                      setExpanded: setExpandedRet,
+                      dir: "ret",
+                    },
+                  ].map(({ title, data, expanded, setExpanded, dir }) => (
+                    <div key={dir} style={{ marginBottom: "16px" }}>
+                      <h3
                         style={{
-                          background: "#0a0a14",
-                          border: "1px solid #1a1a2a",
-                          borderRadius: "8px",
-                          padding: "14px 16px",
-                          marginBottom: "16px",
+                          fontSize: "13px",
+                          fontWeight: 600,
+                          color: "#ccc",
+                          margin: "0 0 8px",
+                          letterSpacing: "-0.01em",
                         }}
                       >
-                        <h3
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#818cf8",
-                            margin: "0 0 10px",
-                            textTransform: "uppercase",
-                            letterSpacing: "0.04em",
-                          }}
-                        >
-                          Trip Analysis
-                        </h3>
-                        <div
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                            gap: "10px",
-                            fontSize: "12px",
-                          }}
-                        >
-                          <div>
-                            <div style={{ color: "#555", fontSize: "10px", marginBottom: "2px" }}>
-                              Valid outbound options
-                            </div>
-                            <div style={{ color: validOut.length > 0 ? "#34d399" : "#f87171", fontWeight: 600 }}>
-                              {validOut.length} of {outbound.length}
-                            </div>
-                          </div>
-                          <div>
-                            <div style={{ color: "#555", fontSize: "10px", marginBottom: "2px" }}>
-                              Valid return options
-                            </div>
-                            <div style={{ color: validRet.length > 0 ? "#34d399" : "#f87171", fontWeight: 600 }}>
-                              {validRet.length} of {returnTrips.length}
-                            </div>
-                          </div>
-                          {bestOut && (
-                            <div>
-                              <div style={{ color: "#555", fontSize: "10px", marginBottom: "2px" }}>
-                                Earliest arrival
-                              </div>
-                              <div style={{ color: "#ccc", fontWeight: 600, fontFamily: "monospace" }}>
-                                {formatTime(bestOut.to?.arrival)}
-                              </div>
-                            </div>
-                          )}
-                          {bestRet && (
-                            <div>
-                              <div style={{ color: "#555", fontSize: "10px", marginBottom: "2px" }}>
-                                Latest return dep.
-                              </div>
-                              <div style={{ color: "#ccc", fontWeight: 600, fontFamily: "monospace" }}>
-                                {formatTime(bestRet.from?.departure)}
-                              </div>
-                            </div>
-                          )}
-                          {groundTime != null && groundTime > 0 && (
-                            <div>
-                              <div style={{ color: "#555", fontSize: "10px", marginBottom: "2px" }}>
-                                Max time on ground
-                              </div>
+                        {dir === "out" ? "→" : "←"} {title}
+                      </h3>
+                      <div
+                        style={{
+                          background: "#0c0c10",
+                          border: "1px solid #1a1a1a",
+                          borderRadius: "8px",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <TableHeader compact={compact} />
+                        {data && data.length > 0 ? (
+                          data.map((connection, index) => (
+                            <div key={index}>
                               <div
-                                style={{
-                                  color:
-                                    groundTime >= 3600
-                                      ? "#34d399"
-                                      : groundTime >= 1800
-                                        ? "#fbbf24"
-                                        : "#f87171",
-                                  fontWeight: 600,
-                                }}
+                                onClick={() => setExpanded(expanded === index ? null : index)}
+                                style={{ cursor: "pointer" }}
                               >
-                                {formatDuration(groundTime)}
+                                <ConnectionRow conn={connection} compact={compact} />
                               </div>
+                              {expanded === index && <SectionDetail conn={connection} />}
                             </div>
-                          )}
-
-                          {validRet.length === 0 && (
-                            <div style={{ gridColumn: "1 / -1" }}>
-                              <div style={{ color: "#f87171", fontSize: "12px", fontWeight: 500, marginBottom: "10px" }}>
-                                No valid return within GA Night window ({gaWindow.end} cutoff). You'd need to
-                                stay overnight or buy a supplementary ticket for the morning train back.
-                              </div>
-                              {morningReturn !== null && (
-                                <div>
-                                  <div
-                                    style={{
-                                      fontSize: "11px",
-                                      color: "#fbbf24",
-                                      fontWeight: 600,
-                                      marginBottom: "6px",
-                                    }}
-                                  >
-                                    First morning trains back to Zürich on {nextDate} (outside GA - separate
-                                    ticket needed):
-                                  </div>
-                                  {morningReturn.length > 0 ? (
-                                    <div
-                                      style={{
-                                        background: "#0c0c10",
-                                        border: "1px solid #2a1500",
-                                        borderRadius: "6px",
-                                        overflow: "hidden",
-                                      }}
-                                    >
-                                      <TableHeader compact={compact} />
-                                      {morningReturn.map((connection, index) => (
-                                        <ConnectionRow
-                                          key={index}
-                                          conn={connection}
-                                          gaDate={date}
-                                          compact={compact}
-                                        />
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <div style={{ fontSize: "11px", color: "#555" }}>
-                                      No morning trains found.
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                          ))
+                        ) : (
+                          <div style={{ padding: "16px", textAlign: "center", color: "#555", fontSize: "12px" }}>
+                            No connections found for this time window.
+                          </div>
+                        )}
                       </div>
-                    );
-                  })()}
+                    </div>
+                  ))}
+                </div>
               </div>
             );
           })()}
@@ -697,7 +616,6 @@ export default function TripPlanner() {
                       <ConnectionRow
                         key={connectionIndex}
                         conn={connection}
-                        gaDate={date}
                         compact={compact}
                       />
                     ))
@@ -739,11 +657,10 @@ export default function TripPlanner() {
           }}
         >
           <strong style={{ color: "#888" }}>How it works:</strong> Click a city to fetch real SBB timetable data for
-          your selected date. Outbound shows departures from 19:00. Return shows arrivals back in Zürich before {" "}
-          {gaWindow.end}. <span style={{ color: "#34d399" }}>✓</span> = within GA Night validity. {" "}
-          <span style={{ opacity: 0.4 }}>Dimmed</span> = outside GA window (you'd need a ticket). Click any row to
-          expand the full route with stops and platforms. Results are cached per route and date for the session. In
-          Multi-City mode, the "Stay" input sets how long after each arrival the next leg departs.
+          your selected date. Outbound and return lists show GA-eligible options only, within the {gaWindow.end}
+          cutoff. Click any row to expand the full route with stops and platforms. Results are cached per route and
+          date for the session. In Multi-City mode, the "Stay" input sets how long after each arrival the next leg
+          departs.
         </div>
       </div>
     </div>
